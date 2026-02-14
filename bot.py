@@ -12,11 +12,12 @@ from strategies.vol_breakout import VolatilityBreakout
 from utils import notify
 
 
-def run_live(poll_interval: int = 60):
+def run_live(poll_interval: int = 60, status_every: int = 10):
     client = UpbitClient(settings.access_key, settings.secret_key)
     strategy = VolatilityBreakout(client, settings)
 
     logger.info("Starting live trading loop for {}", settings.target_market)
+    loop_count = 0
     while True:
         try:
             result = strategy.execute_live()
@@ -25,6 +26,19 @@ def run_live(poll_interval: int = 60):
                 notify(settings.webhook_url, {
                     "content": f"{settings.target_market} {result['record'].action} {result['record'].volume:.6f} @ {result['record'].price:.2f} ({result['record'].reason})"
                 })
+
+            loop_count += 1
+            if loop_count % status_every == 0:
+                krw_balance = client.get_balance(strategy.base_currency)
+                coin_balance = client.get_balance(strategy.quote_currency)
+                ticker = client.ticker(settings.target_market)
+                logger.info(
+                    "Status: KRW={:.2f}, {}={:.6f}, price={:.0f}",
+                    krw_balance,
+                    strategy.quote_currency,
+                    coin_balance,
+                    ticker.get("trade_price", 0),
+                )
         except Exception as exc:
             logger.exception("Live loop error: {}", exc)
             notify(settings.webhook_url, {"content": f"Live loop error: {exc}"})
@@ -43,13 +57,14 @@ def main():
     parser.add_argument("--mode", choices=["live", "backtest"], default="backtest")
     parser.add_argument("--interval", type=int, default=60, help="poll interval seconds")
     parser.add_argument("--count", type=int, default=400, help="backtest candle count")
+    parser.add_argument("--status_every", type=int, default=10, help="status log frequency in loops")
     args = parser.parse_args()
 
     logger.add("logs/{time}.log", rotation="1 day")
 
     try:
         if args.mode == "live":
-            run_live(args.interval)
+            run_live(args.interval, args.status_every)
         else:
             run_backtest(args.count)
     except KeyboardInterrupt:
