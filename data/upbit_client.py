@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
-import os
-import time
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
+import jwt
 import requests
 from loguru import logger
 
@@ -43,17 +42,15 @@ class UpbitClient:
             "nonce": str(uuid.uuid4())
         }
         if query:
-            q = json.dumps(query, separators=(",", ":"), sort_keys=True)
-            payload["query"] = q
+            query_string = urlencode({k: str(v) for k, v in query.items()})
             m = hashlib.sha512()
-            m.update(q.encode())
+            m.update(query_string.encode())
             payload["query_hash"] = m.hexdigest()
             payload["query_hash_alg"] = "SHA512"
 
-        j = json.dumps(payload).encode()
-        token = hmac.new(self.secret_key.encode(), j, hashlib.sha256).hexdigest()
+        jwt_token = jwt.encode(payload, self.secret_key, algorithm="HS256")
         return {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {jwt_token}",
             "Content-Type": "application/json"
         }
 
@@ -64,9 +61,10 @@ class UpbitClient:
         return resp.json()
 
     def get_balance(self, currency: str) -> float:
-        for bal in self.balances():
+        balances = self.balances()
+        for bal in balances:
             if bal.get("currency") == currency:
-                return float(bal.get("balance", 0))
+                return float(bal.get("balance", 0) or 0)
         return 0.0
 
     def place_limit_order(self, side: str, market: str, price: float, volume: float):
