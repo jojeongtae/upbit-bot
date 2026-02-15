@@ -20,23 +20,45 @@ class TradeRecord:
 
 
 class VolatilityBreakout:
-    def __init__(self, client: UpbitClient, settings: Settings, k: float = 0.5):
+    def __init__(
+        self,
+        client: UpbitClient,
+        settings: Settings,
+        market: Optional[str] = None,
+        capital_per_trade: Optional[float] = None,
+        k: float = 0.5,
+    ):
         self.client = client
         self.settings = settings
-        self.k = k
-        market_split = settings.target_market.split("-")
+        self.market = (market or settings.target_market).upper()
+        market_split = self.market.split("-")
         if len(market_split) != 2:
-            raise ValueError("TARGET_MARKET must be like KRW-BTC")
+            raise ValueError("Market code must be like KRW-BTC")
         self.base_currency, self.quote_currency = market_split
+        self.capital_per_trade = capital_per_trade or settings.base_capital
+        self.k = k
         self.entry_price: Optional[float] = None
         self.trade_log: List[TradeRecord] = []
+        self.active: bool = True
+
+    def set_active(self, active: bool) -> None:
+        self.active = active
+
+    def update_capital(self, amount: float) -> None:
+        self.capital_per_trade = amount
+
+    def has_open_position(self) -> bool:
+        return self._position_size() > 0
 
     def _fetch_candles(self, count: int = 60) -> pd.DataFrame:
-        raw = self.client.candles(self.settings.target_market, unit=60, count=count)
+        raw = self.client.candles(self.market, unit=60, count=count)
         df = pd.DataFrame(raw)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp")
-        df.rename(columns={"opening_price": "open", "high_price": "high", "low_price": "low", "trade_price": "close"}, inplace=True)
+        df.rename(
+            columns={"opening_price": "open", "high_price": "high", "low_price": "low", "trade_price": "close"},
+            inplace=True,
+        )
         return df[["timestamp", "open", "high", "low", "close"]]
 
     def _signal(self, df: pd.DataFrame) -> Optional[Dict[str, float]]:
@@ -59,14 +81,14 @@ class VolatilityBreakout:
             return 0.0
 
     def _has_position(self) -> bool:
-        return self._position_size() > 0
+        return self.has_open_position()
 
     def _current_price(self) -> Optional[float]:
         try:
-            ticker = self.client.ticker(self.settings.target_market)
+            ticker = self.client.ticker(self.market)
             return float(ticker.get("trade_price"))
         except Exception as exc:
-            logger.warning("Failed to fetch ticker for %s: %s", self.settings.target_market, exc)
+            logger.warning("Failed to fetch ticker for %s: %s", self.market, exc)
             return None
 
     def _check_exit(self):
@@ -90,14 +112,14 @@ class VolatilityBreakout:
             return None
 
         try:
-            order = self.client.place_market_sell(self.settings.target_market, position)
+            order = self.client.place_market_sell(self.market, position)
         except Exception as exc:
             logger.error("Sell order failed: %s", exc)
             return None
         record = TradeRecord(timestamp=str(pd.Timestamp.utcnow()), action="SELL", price=current_price, volume=position, reason=exit_reason)
         self.trade_log.append(record)
         self.entry_price = None
-        return {"order": order, "record": record}
+        return {"order": order, "record": record, "market": self.market}
 
     def execute_live(self):
         df = self._fetch_candles(count=2)
@@ -105,6 +127,10 @@ class VolatilityBreakout:
             exit_result = self._check_exit()
             if exit_result:
                 return exit_result
+            if not self.active:
+                return None
+        elif not self.active:
+            return None
 
         signal = self._signal(df)
         if not signal:
@@ -113,24 +139,25 @@ class VolatilityBreakout:
         price = signal["price"]
         adjusted_price = price * (1 + self.settings.slippage_bps / 10000)
         krw_balance = self.client.get_balance(self.base_currency)
-        stake = min(self.settings.base_capital, krw_balance)
+        stake = min(self.capital_per_trade, krw_balance)
         if stake < self.settings.min_order_krw:
             logger.warning("Insufficient KRW balance for min order: %.2f < %.2f", stake, self.settings.min_order_krw)
             return None
         volume = round(stake / adjusted_price, 6)
         try:
-            order = self.client.place_limit_order("bid", self.settings.target_market, adjusted_price, volume)
+            order = self.client.place_limit_order("bid", self.market, adjusted_price, volume)
         except Exception as exc:
             logger.error("Buy order failed: %s", exc)
             return None
         self.entry_price = adjusted_price
         record = TradeRecord(timestamp=str(df.iloc[-1]["timestamp"]), action="BUY", price=adjusted_price, volume=volume, reason="breakout")
         self.trade_log.append(record)
-        return {"order": order, "record": record}
+        return {"order": order, "record": record, "market": self.market}
 
     def run_backtest(self, count: int = 200):
         df = self._fetch_candles(count=count)
-        cash = self.settings.base_capital
+        starting_capital = self.capital_per_trade
+        cash = starting_capital
         position = 0.0
         equity_curve = []
         trades = []
@@ -152,14 +179,15 @@ class VolatilityBreakout:
         if position > 0:
             cash = position * df.iloc[-1]["close"]
             trades.append((df.iloc[-1]["timestamp"], "sell", df.iloc[-1]["close"]))
-        profit = cash - self.settings.base_capital
+        profit = cash - starting_capital
         equity_series = pd.Series(equity_curve)
         drawdown = (equity_series - equity_series.cummax()) / equity_series.cummax()
         metrics = {
+            "market": self.market,
             "final_equity": cash,
             "profit": profit,
-            "roi": profit / self.settings.base_capital,
+            "roi": profit / starting_capital if starting_capital else 0,
             "max_drawdown": drawdown.min() if not drawdown.empty else 0,
-            "trades": trades
+            "trades": trades,
         }
         return metrics
