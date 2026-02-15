@@ -121,6 +121,32 @@ class VolatilityBreakout:
         self.entry_price = None
         return {"order": order, "record": record, "market": self.market}
 
+    @staticmethod
+    def _price_tick(price: float) -> float:
+        if price >= 2_000_000:
+            return 1000
+        if price >= 1_000_000:
+            return 500
+        if price >= 500_000:
+            return 100
+        if price >= 100_000:
+            return 50
+        if price >= 10_000:
+            return 10
+        if price >= 1_000:
+            return 1
+        if price >= 100:
+            return 0.1
+        if price >= 10:
+            return 0.01
+        if price >= 1:
+            return 0.001
+        return 0.0001
+
+    def _apply_price_tick(self, price: float) -> float:
+        tick = self._price_tick(price)
+        return round(round(price / tick) * tick, 4)
+
     def execute_live(self):
         df = self._fetch_candles(count=2)
         if self._has_position():
@@ -137,7 +163,7 @@ class VolatilityBreakout:
             return None
 
         price = signal["price"]
-        adjusted_price = price * (1 + self.settings.slippage_bps / 10000)
+        adjusted_price = self._apply_price_tick(price * (1 + self.settings.slippage_bps / 10000))
         krw_balance = self.client.get_balance(self.base_currency)
         stake = min(self.capital_per_trade, krw_balance)
         if stake < self.settings.min_order_krw:
