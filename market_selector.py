@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import requests
+import time
 from loguru import logger
 
 UPBIT_BASE_URL = "https://api.upbit.com/v1"
@@ -11,6 +12,22 @@ UPBIT_BASE_URL = "https://api.upbit.com/v1"
 
 def _chunked(seq: List[str], size: int) -> List[List[str]]:
     return [seq[i : i + size] for i in range(0, len(seq), size)]
+
+
+def _safe_request(session: requests.Session, method: str, url: str, **kwargs):
+    retries = kwargs.pop("retries", 3)
+    backoff = kwargs.pop("backoff", 1.0)
+    for attempt in range(retries):
+        resp = session.request(method, url, **kwargs)
+        if resp.status_code == 429:
+            logger.warning("Rate limited (%s). sleeping %.1fs", url, backoff)
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+        resp.raise_for_status()
+        return resp
+    resp.raise_for_status()
+    return resp
 
 
 class MarketSelector:
@@ -75,21 +92,27 @@ class MarketSelector:
         return self.current_markets
 
     def _fetch_top_markets(self) -> List[str]:
-        resp = self.session.get(f"{UPBIT_BASE_URL}/market/all", params={"isDetails": "false"}, timeout=10)
-        resp.raise_for_status()
+        resp = _safe_request(
+            self.session,
+            "GET",
+            f"{UPBIT_BASE_URL}/market/all",
+            params={"isDetails": "false"},
+            timeout=10,
+        )
         data = resp.json()
         krw_markets = [item["market"] for item in data if item.get("market", "").startswith("KRW-")]
         if not krw_markets:
             return []
 
         market_stats = []
-        for chunk in _chunked(krw_markets, 20):
-            ticker_resp = self.session.get(
+        for chunk in _chunked(krw_markets, 10):
+            ticker_resp = _safe_request(
+                self.session,
+                "GET",
                 f"{UPBIT_BASE_URL}/ticker",
                 params={"markets": ",".join(chunk)},
                 timeout=10,
             )
-            ticker_resp.raise_for_status()
             for item in ticker_resp.json():
                 market = item.get("market")
                 acc_price = float(item.get("acc_trade_price_24h", 0))
