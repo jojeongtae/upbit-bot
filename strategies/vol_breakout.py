@@ -114,7 +114,7 @@ class VolatilityBreakout:
         try:
             order = self.client.place_market_sell(self.market, position)
         except Exception as exc:
-            logger.error("Sell order failed on %s: %s", self.market, exc)
+            logger.error("Sell order failed on {}: {}", self.market, exc)
             return None
         record = TradeRecord(timestamp=str(pd.Timestamp.utcnow()), action="SELL", price=current_price, volume=position, reason=exit_reason)
         self.trade_log.append(record)
@@ -147,7 +147,7 @@ class VolatilityBreakout:
         try:
             order = self.client.place_limit_order("bid", self.market, adjusted_price, volume)
         except Exception as exc:
-            logger.error("Buy order failed on %s: %s", self.market, exc)
+            logger.error("Buy order failed on {}: {}", self.market, exc)
             return None
         self.entry_price = adjusted_price
         record = TradeRecord(timestamp=str(df.iloc[-1]["timestamp"]), action="BUY", price=adjusted_price, volume=volume, reason="breakout")
