@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
@@ -43,7 +43,7 @@ class Settings:
     access_key: str = env_str("UPBIT_ACCESS_KEY")
     secret_key: str = env_str("UPBIT_SECRET_KEY")
     target_market: str = env_str("TARGET_MARKET", "KRW-BTC")
-    target_markets: List[str] = env_list("TARGET_MARKETS")
+    target_markets: List[str] = field(default_factory=lambda: env_list("TARGET_MARKETS"))
     base_capital: float = env_float("BASE_CAPITAL", 100000)
     total_capital: float = env_float("TOTAL_CAPITAL", 100000)
     risk_per_trade: float = env_float("RISK_PER_TRADE", 1.0)
