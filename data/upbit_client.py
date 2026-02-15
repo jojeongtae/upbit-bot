@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 import jwt
 import requests
+from requests import HTTPError
 from loguru import logger
 
 UPBIT_BASE_URL = "https://api.upbit.com/v1"
@@ -67,8 +68,18 @@ class UpbitClient:
                 return float(bal.get("balance", 0) or 0)
         return 0.0
 
-    def place_limit_order(self, side: str, market: str, price: float, volume: float):
+    def _post_order(self, body: Dict[str, Any]):
         url = f"{UPBIT_BASE_URL}/orders"
+        headers = self._auth_headers(body)
+        resp = requests.post(url, headers=headers, json=body, timeout=5)
+        try:
+            resp.raise_for_status()
+        except HTTPError as exc:
+            detail = resp.text if resp is not None else ""
+            raise RuntimeError(f"{exc} | {detail}") from exc
+        return resp.json()
+
+    def place_limit_order(self, side: str, market: str, price: float, volume: float):
         body = {
             "market": market,
             "side": side,
@@ -76,20 +87,13 @@ class UpbitClient:
             "price": f"{price:.2f}",
             "ord_type": "limit"
         }
-        headers = self._auth_headers(body)
-        resp = requests.post(url, headers=headers, json=body, timeout=5)
-        resp.raise_for_status()
-        return resp.json()
+        return self._post_order(body)
 
     def place_market_sell(self, market: str, volume: float):
-        url = f"{UPBIT_BASE_URL}/orders"
         body = {
             "market": market,
             "side": "ask",
             "volume": f"{volume:.8f}",
             "ord_type": "market"
         }
-        headers = self._auth_headers(body)
-        resp = requests.post(url, headers=headers, json=body, timeout=5)
-        resp.raise_for_status()
-        return resp.json()
+        return self._post_order(body)
