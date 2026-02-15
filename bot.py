@@ -11,6 +11,7 @@ from data.upbit_client import UpbitClient
 from market_selector import MarketSelector
 from strategies.vol_breakout import VolatilityBreakout
 from utils import notify
+from data.snapshot import create_snapshot, load_snapshot, compare_with_snapshot
 
 
 def _find_balance(balances, currency: str) -> float:
@@ -79,7 +80,13 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
                 logger.info("Maintaining {} until position closes", market)
         strategies = new_strategies
 
-    initial_cap = client.get_balance("KRW")
+    snapshot = load_snapshot()
+    if snapshot:
+        logger.info("Loaded existing snapshot")
+        compare_with_snapshot(client, snapshot)
+    else:
+        snapshot = create_snapshot(client)
+    initial_cap = snapshot.get("krw", client.get_balance("KRW"))
     sync_strategies(desired_markets, initial_cap)
 
     logger.info("Starting live trading loop for dynamic markets: {}", ", ".join(strategies.keys()))
@@ -91,6 +98,8 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
                 desired_markets = fallback_markets
             available_capital = client.get_balance("KRW")
             sync_strategies(desired_markets, available_capital)
+            if snapshot and (loop_count % status_every == 0):
+                compare_with_snapshot(client, snapshot)
             if not strategies:
                 logger.warning("No active strategies; sleeping")
                 time.sleep(poll_interval)
