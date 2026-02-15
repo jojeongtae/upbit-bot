@@ -34,14 +34,34 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
     desired_markets = selector.current_markets or fallback_markets
     strategies: dict[str, VolatilityBreakout] = {}
 
-    def sync_strategies(markets: list[str]) -> None:
+    def sync_strategies(markets: list[str], available_capital: float) -> None:
         nonlocal strategies
-        if not markets:
+        if available_capital < settings.min_order_krw:
+            logger.warning(
+                "KRW balance %.2f below minimum order %.0f; disabling new entries",
+                available_capital,
+                settings.min_order_krw,
+            )
+            for strat in strategies.values():
+                strat.set_active(False)
             return
-        total_capital = settings.total_capital or settings.base_capital
-        capital_per = max(total_capital / len(markets), settings.min_order_krw)
+        if not markets:
+            for strat in strategies.values():
+                strat.set_active(False)
+            return
+        max_slots = max(1, int(available_capital // settings.min_order_krw))
+        active_markets = markets[:max_slots]
+        if len(active_markets) < len(markets):
+            logger.warning(
+                "Capital %.2f allows only %d markets (min order %.0f)",
+                available_capital,
+                len(active_markets),
+                settings.min_order_krw,
+            )
+        capital_pool = min(available_capital, settings.total_capital or available_capital)
+        capital_per = max(min(capital_pool / len(active_markets), settings.base_capital), settings.min_order_krw)
         new_strategies: dict[str, VolatilityBreakout] = {}
-        for market in markets:
+        for market in active_markets:
             if market in strategies:
                 strat = strategies[market]
                 strat.update_capital(capital_per)
@@ -59,7 +79,8 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
                 logger.info("Maintaining {} until position closes", market)
         strategies = new_strategies
 
-    sync_strategies(desired_markets)
+    initial_cap = client.get_balance("KRW")
+    sync_strategies(desired_markets, initial_cap)
 
     logger.info("Starting live trading loop for dynamic markets: {}", ", ".join(strategies.keys()))
     loop_count = 0
@@ -68,10 +89,8 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
             desired_markets = selector.maybe_refresh()
             if not desired_markets:
                 desired_markets = fallback_markets
-            if set(m.upper() for m in desired_markets) != set(strategies.keys()):
-                sync_strategies(desired_markets)
-                logger.info("Updated market basket: {}", ", ".join(strategies.keys()))
-
+            available_capital = client.get_balance("KRW")
+            sync_strategies(desired_markets, available_capital)
             if not strategies:
                 logger.warning("No active strategies; sleeping")
                 time.sleep(poll_interval)
