@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 from pathlib import Path
 from typing import List
 
@@ -54,6 +55,9 @@ class Settings:
     stop_loss_pct: float = env_float("STOP_LOSS_PCT", 0.02)
     top_markets_count: int = env_int("TOP_MARKETS_COUNT", 5)
     market_refresh_hour: int = env_int("MARKET_REFRESH_HOUR", 9)
+    llm_model: str = env_str("LLM_MODEL", "gpt-4o-mini")
+    llm_min_interval: int = env_int("LLM_MIN_INTERVAL", 600)
+    enable_llm_filter: bool = env_str("ENABLE_LLM_FILTER", "1") == "1"
 
     @property
     def default_market(self) -> str:

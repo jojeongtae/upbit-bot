@@ -147,7 +147,21 @@ class VolatilityBreakout:
         tick = self._price_tick(price)
         return round(round(price / tick) * tick, 4)
 
-    def execute_live(self):
+    def build_context(self) -> Dict[str, float]:
+        trades = self.trade_log[-3:]
+        trade_summary = []
+        for trade in trades:
+            trade_summary.append({
+                "action": trade.action,
+                "price": trade.price,
+                "volume": trade.volume,
+                "timestamp": trade.timestamp,
+            })
+        return {
+            "recent_trades": trade_summary,
+        }
+
+    def execute_live(self, decision_hook=None):
         df = self._fetch_candles(count=2)
         if self._has_position():
             exit_result = self._check_exit()
@@ -161,6 +175,26 @@ class VolatilityBreakout:
         signal = self._signal(df)
         if not signal:
             return None
+
+        if decision_hook:
+            base_price = max(df.iloc[-2]["low"], 1)
+            context = {
+                "price": signal["price"],
+                "range_pct": ((df.iloc[-2]["high"] - df.iloc[-2]["low"]) / base_price) * 100,
+                "trend": "up" if df.iloc[-1]["close"] >= df.iloc[-1]["open"] else "down",
+                "recent_trades": [
+                    {
+                        "result": t.action,
+                        "price": t.price,
+                        "pnl_pct": 0,
+                    }
+                    for t in self.trade_log[-3:]
+                ],
+                "pnl_24h": 0,
+            }
+            if not decision_hook(self.market, context):
+                logger.info("LLM filter blocked {} entry", self.market)
+                return None
 
         price = signal["price"]
         adjusted_price = self._apply_price_tick(price * (1 + self.settings.slippage_bps / 10000))

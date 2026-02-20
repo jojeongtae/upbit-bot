@@ -12,6 +12,7 @@ from market_selector import MarketSelector
 from strategies.vol_breakout import VolatilityBreakout
 from utils import notify
 from data.snapshot import create_snapshot, load_snapshot, compare_with_snapshot
+from llm_filter import LLMFilter
 
 
 def _find_balance(balances, currency: str) -> float:
@@ -89,6 +90,15 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
     initial_cap = snapshot.get("krw", client.get_balance("KRW"))
     sync_strategies(desired_markets, initial_cap)
 
+    llm_filter = None
+    if settings.enable_llm_filter:
+        try:
+            llm_filter = LLMFilter(settings.llm_model, settings.llm_min_interval)
+            logger.info("LLM filter enabled with model {}", settings.llm_model)
+        except Exception as exc:
+            logger.warning("Failed to init LLM filter: %s", exc)
+            llm_filter = None
+
     logger.info("Starting live trading loop for dynamic markets: {}", ", ".join(strategies.keys()))
     loop_count = 0
     while True:
@@ -105,8 +115,27 @@ def run_live(poll_interval: int = 60, status_every: int = 10):
                 time.sleep(poll_interval)
                 continue
 
+            snapshot_base = snapshot.get("krw") if snapshot else None
+            pnl_pct = (
+                ((available_capital - snapshot_base) / snapshot_base) * 100
+                if snapshot_base and snapshot_base > 0
+                else 0
+            )
+
+            def decision_hook_factory():
+                if not llm_filter:
+                    return None
+
+                def _hook(market: str, context: dict):
+                    context["pnl_24h"] = pnl_pct
+                    return llm_filter.should_allow(market, context)
+
+                return _hook
+
+            decision_hook = decision_hook_factory()
+
             for market, strategy in strategies.items():
-                result = strategy.execute_live()
+                result = strategy.execute_live(decision_hook=decision_hook)
                 if result:
                     record = result["record"]
                     logger.info(
